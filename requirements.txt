@@ -1,0 +1,7 @@
+pypdf
+python-docx
+pandas
+pyyaml
+scikit-learn
+xgboost
+streamlit

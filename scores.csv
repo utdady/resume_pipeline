@@ -1,0 +1,2 @@
+file,score,recommendation,explanation,years_found,must_haves_present,must_haves_total,must_have_coverage,skill_overlap,title_similarity,years_score
+sample_resume.txt,0.94,Advance,"Must-have coverage: 100% (0 missing) | Skill overlap: 81% (9 nice-to-haves found) |   Found: sql, relay, visual basic, solar, breaker |   ... and 4 more | Title similarity: 90% | Years experience: 100% (5.0 years found) | ✓ All must-haves present",5.0,7,7,1.0,0.818,0.9,1.0

@@ -1,0 +1,177 @@
+# Job Description Metadata Configuration
+
+# Customized for: Electrical Engineer 2 - Protection & Control (SCS-2237843)
+
+# Department: Protection & Control Applications (Renewables/Solar/Power Systems)
+
+
+
+job_title: "Electrical Engineer 2 - Protection & Control"
+
+requisition_id: "SCS-2237843"
+
+department: "Protection & Control Applications"
+
+
+
+# MUST-HAVE skills/qualifications (all should be present for "advance")
+
+must_haves:
+
+  - "bachelor"  # Bachelor's degree in Electrical Engineering required
+
+  - "electrical engineer"
+
+  - "power systems"
+
+  - "short circuit"  # Short-circuit analysis required
+
+  - "protection"  # Protection requirements/schemes required
+
+  - "cape"  # CAPE software (now Siemens Gridscale X)
+
+  - "aspen"  # ASPEN software required
+
+
+
+# NICE-TO-HAVE skills (bonus points, but not required)
+
+nice_to_haves:
+
+  - "solar"  # Renewable/solar experience preferred
+
+  - "renewables"
+
+  - "renewable energy"
+
+  - "pv"
+
+  - "photovoltaic"
+
+  - "breaker"  # Breaker-duty study
+
+  - "relay"  # Protection relays
+
+  - "transmission"  # Transmission system experience
+
+  - "transformer"  # Transformer modeling
+
+  - "substation"
+
+  - "interconnection"  # Interconnection experience
+
+  - "siemens"  # Siemens Gridscale X
+
+  - "gridscale"
+
+  - "sql"  # SQL is a plus
+
+  - "visual basic"  # Visual Basic is a plus
+
+  - "scada"
+
+  - "etap"
+
+  - "matlab"
+
+  - "internship"  # Internships in power systems/renewables
+
+  - "capital project"
+
+  - "nerc"
+
+  - "stability"  # Transmission stability requirements
+
+
+
+# Title keywords (for role alignment scoring)
+
+title_keywords:
+
+  - "electrical"
+
+  - "engineer"
+
+  - "power"
+
+  - "protection"
+
+  - "control"
+
+  - "renewables"
+
+  - "solar"
+
+  - "energy"
+
+  - "transmission"
+
+  - "systems"
+
+
+
+# Experience requirements
+
+experience:
+
+  min_years: 4
+
+  max_years: 6
+
+  preferred_years: 5
+
+
+
+# Scoring weights (should sum to 1.0)
+
+weights:
+
+  must_have_coverage: 0.45  # Critical: CAPE, ASPEN, short-circuit, protection
+
+  skill_overlap: 0.25       # Solar/renewables experience is valuable
+
+  title_similarity: 0.15    # Role alignment matters
+
+  years_exp: 0.15           # 4-6 years required
+
+
+
+# Decision thresholds
+
+thresholds:
+
+  advance: 0.72  # score >= 0.72 AND all must-haves present (strong match)
+
+  review: 0.50   # score >= 0.50 (potential with some gaps)
+
+  # Below 0.50 = reject (significant gaps)
+
+
+
+# Additional context for scoring
+
+notes: |
+
+  Key responsibilities:
+
+  - Short-circuit analysis & breaker-duty studies
+
+  - CAPE/ASPEN software proficiency required
+
+  - Protection schemes design for transmission interconnections
+
+  - Customer communication & technical expertise
+
+  - Renewable energy (solar) focus
+
+  
+
+  Red flags to watch for:
+
+  - No CAPE or ASPEN experience
+
+  - Less than 4 years experience
+
+  - No power systems background
+
+  - Missing protection/short-circuit analysis experience

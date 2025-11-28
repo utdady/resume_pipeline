@@ -1,0 +1,49 @@
+metadata_version: 1
+job:
+  requisition_id: FA-2024-001
+  title: Financial Analyst
+  domain: financial
+  summary: 'Financial Analyst - Investment Banking  Position: Financial Analyst Department:
+    Investment Banking Location: New York, NY  Job Description:  We are seeking a
+    highly motivated Financial Analyst to join...'
+must_haves:
+- dcf
+- financial analysis
+- accounting
+- valuation
+- years of
+- bachelor
+- financial modeling
+- degree
+- cfa
+- certification
+- mba
+- or cfa
+- excel
+nice_to_haves:
+- investment banking
+- tableau
+- sql
+- tableau or
+- bloomberg terminal
+- power bi
+- certification
+- python
+- advanced
+- excel
+title_keywords:
+- financial
+- analyst
+experience:
+  min_years: 3
+  max_years: 5
+  preferred_years: 4
+weights:
+  must_have_coverage: 0.45
+  skill_overlap: 0.25
+  title_similarity: 0.15
+  years_exp: 0.15
+thresholds:
+  advance: 0.72
+  review: 0.5
+notes: 'Auto-generated from job description. Domain: financial'

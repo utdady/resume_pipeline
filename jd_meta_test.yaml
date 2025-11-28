@@ -1,0 +1,53 @@
+metadata_version: 1
+job:
+  requisition_id: AUTO-GENERATED
+  title: Software Engineer - Full Stack Developer
+  domain: software
+  summary: 'Software Engineer - Full Stack Developer  Job Description:  We are seeking
+    a skilled Software Engineer with expertise in full-stack development to join our
+    dynamic team. The ideal candidate will desig...'
+must_haves:
+- python
+- and kubernetes
+- degree
+- development
+- and sql
+- years of
+- react
+- bachelor
+- java
+- programming
+- javascript
+- api
+- version control
+- sql experience
+nice_to_haves:
+- sql
+- python
+- agile
+- machine learning
+- and kubernetes
+- cd pipeline
+- scrum methodology
+- scrum
+- master
+- cloud platforms
+title_keywords:
+- software
+- engineer
+- full
+- stack
+- developer
+experience:
+  min_years: 5
+  max_years: 5
+  preferred_years: 5
+weights:
+  must_have_coverage: 0.45
+  skill_overlap: 0.25
+  title_similarity: 0.15
+  years_exp: 0.15
+thresholds:
+  advance: 0.72
+  review: 0.5
+notes: 'Auto-generated from job description. Domain: software'
