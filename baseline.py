@@ -341,7 +341,11 @@ def generate_candidate_report(
 
 
 def score_resume(resume_path: Path, config: Dict) -> Dict:
-    """Score a single resume against the job description."""
+    """Score a single resume against the job description.
+
+    Optionally uses an LLM (Ollama) to interpret whether each requirement is met,
+    falling back to NLP/rule-based scoring when LLM is unavailable or fails.
+    """
     try:
         text = extract_text(resume_path)
     except Exception as e:
@@ -363,9 +367,44 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
     weights = config.get("weights", {})
     thresholds = config.get("thresholds", {})
     
+    # Optional: LLM-powered requirement evaluation
+    llm_result = None
+    use_llm_resume = config.get("_use_llm_resume", False)
+    if use_llm_resume:
+        try:
+            from jd_analyzer_llm import check_ollama_available
+            from resume_analyzer_llm import analyze_resume_with_ollama
+
+            if check_ollama_available():
+                llm_result = analyze_resume_with_ollama(text, config)
+            else:
+                print("Ollama not available for resume analysis; using NLP-based scoring.")
+        except Exception as exc:
+            print(f"Warning: LLM resume analysis failed for {resume_path.name}: {exc}")
+            llm_result = None
+
     # Calculate component scores
-    must_have_score, missing_must_haves, found_must_haves = score_must_have_coverage(text, must_haves)
-    skill_score, found_skills = score_skill_overlap(text, nice_to_haves)
+    if llm_result is not None:
+        mh_decisions = llm_result.get("must_haves", {})
+        nh_decisions = llm_result.get("nice_to_haves", {})
+
+        # Must-haves
+        found_must_haves = [mh for mh in must_haves if mh_decisions.get(mh, {}).get("met")]
+        missing_must_haves = [mh for mh in must_haves if mh not in found_must_haves]
+        total_mh = len(must_haves)
+        must_have_score = len(found_must_haves) / total_mh if total_mh > 0 else 1.0
+
+        # Nice-to-haves
+        found_skills = [nh for nh in nice_to_haves if nh_decisions.get(nh, {}).get("met")]
+        total_nh = len(nice_to_haves)
+        if total_nh == 0:
+            skill_score = 0.0
+        else:
+            # Reuse the same normalization logic as score_skill_overlap
+            skill_score = min(len(found_skills) / max(total_nh * 0.5, 10), 1.0)
+    else:
+        must_have_score, missing_must_haves, found_must_haves = score_must_have_coverage(text, must_haves)
+        skill_score, found_skills = score_skill_overlap(text, nice_to_haves)
     title_score = score_title_similarity(text, title_keywords)
     
     years_found = extract_years_experience(text)
@@ -401,6 +440,18 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
         found_skills,
         all_must_haves_present,
     )
+
+    # Append any LLM-derived summary/risks if available
+    if llm_result is not None:
+        extra_parts = []
+        summary = llm_result.get("summary", "")
+        if summary:
+            extra_parts.append(f"LLM summary: {summary}")
+        risks = llm_result.get("risks") or []
+        if risks:
+            extra_parts.append("LLM risk flags: " + "; ".join(str(r) for r in risks[:5]))
+        if extra_parts:
+            explanation = explanation + " | " + " | ".join(extra_parts)
     
     return {
         "file": resume_path.name,
@@ -444,6 +495,11 @@ def main() -> None:
         help="Output CSV file path (default: scores.csv)",
     )
     parser.add_argument(
+        "--llm-resume",
+        action="store_true",
+        help="Use Ollama LLM to interpret resumes (falls back to NLP when unavailable)",
+    )
+    parser.add_argument(
         "--reports-dir",
         type=Path,
         default=Path("candidate_reports"),
@@ -458,6 +514,11 @@ def main() -> None:
     
     # Load configuration
     config = load_config(args.config)
+
+    # Attach runtime flag so score_resume can see whether to use LLM
+    if args.llm_resume:
+        config = dict(config)  # shallow copy to avoid mutating original object
+        config["_use_llm_resume"] = True
     
     # Collect resume files (deduplicate)
     resume_files = []

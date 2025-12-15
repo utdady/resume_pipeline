@@ -397,6 +397,12 @@ def show_scoring_page():
     
     # Step 3: Score resumes using the customized configuration
     st.subheader("Step 3: Generate Scores")
+
+    use_llm_resume = st.checkbox(
+        "🧠 Use AI to interpret resumes (Ollama)",
+        value=False,
+        help="Ask the LLM to judge whether each requirement is met; falls back to NLP if Ollama is not available."
+    )
     
     if st.button("🚀 Score Resumes", type="primary", use_container_width=True):
         if "custom_config" not in st.session_state:
@@ -408,6 +414,10 @@ def show_scoring_page():
             return
         
         config = st.session_state["custom_config"]
+
+        # Attach LLM-resume flag into config so baseline can see it
+        config = copy.deepcopy(config)
+        config["_use_llm_resume"] = use_llm_resume
         
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -428,7 +438,8 @@ def show_scoring_page():
                     progress = 40 + int((i + 1) / len(resume_paths) * 50)
                     progress_bar.progress(progress)
                     status_text.text(f"📊 Scoring {resume_path.name}... ({i+1}/{len(resume_paths)})")
-                    
+
+                    # For UI we rely on baseline's internal hybrid logic (config flag)
                     result = score_resume(resume_path, config)
                     results.append(result)
             
