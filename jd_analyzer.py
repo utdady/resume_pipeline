@@ -1,10 +1,23 @@
-"""Auto-extract job requirements from any job description and generate jd_meta.yaml."""
+"""Auto-extract job requirements from any job description and generate jd_meta.yaml.
+Enhanced with NLP using spaCy for human-like understanding."""
 import argparse
 import re
+import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, Optional
 
 import yaml
+
+from jd_analyzer_llm import analyze_jd_hybrid
+
+try:
+    import spacy
+    from spacy import displacy
+    NLP_AVAILABLE = True
+except ImportError:
+    NLP_AVAILABLE = False
+    print("Warning: spaCy not installed. Install with: pip install spacy && python -m spacy download en_core_web_sm")
+    print("Falling back to basic regex parsing...")
 
 
 # Domain detection keywords
@@ -36,11 +49,39 @@ DOMAIN_KEYWORDS = {
     ]
 }
 
+# Load spaCy model (lazy loading)
+_nlp_model = None
+
+def get_nlp_model():
+    """Lazy load spaCy model."""
+    global _nlp_model
+    if not NLP_AVAILABLE:
+        return None
+    if _nlp_model is None:
+        try:
+            _nlp_model = spacy.load("en_core_web_sm")
+        except OSError:
+            print("Warning: spaCy model 'en_core_web_sm' not found.")
+            print("Install with: python -m spacy download en_core_web_sm")
+            return None
+    return _nlp_model
+
 
 def detect_domain(text: str) -> str:
-    """Detect the primary domain of the job description."""
+    """Detect the primary domain of the job description using NLP-enhanced analysis."""
     normalized = text.lower()
     domain_scores = {}
+    
+    # Use NLP to understand context better
+    nlp = get_nlp_model()
+    if nlp:
+        doc = nlp(text)
+        # Look for domain-related entities and keywords in context
+        for ent in doc.ents:
+            ent_text = ent.text.lower()
+            for domain, keywords in DOMAIN_KEYWORDS.items():
+                if any(kw in ent_text for kw in keywords):
+                    domain_scores[domain] = domain_scores.get(domain, 0) + 2
     
     # Check financial domain first (more specific)
     if "financial analyst" in normalized or "investment banking" in normalized:
@@ -48,10 +89,11 @@ def detect_domain(text: str) -> str:
         if financial_score > 2:
             return "financial"
     
+    # Traditional keyword matching
     for domain, keywords in DOMAIN_KEYWORDS.items():
         score = sum(1 for keyword in keywords if keyword in normalized)
         if score > 0:
-            domain_scores[domain] = score
+            domain_scores[domain] = domain_scores.get(domain, 0) + score
     
     if domain_scores:
         return max(domain_scores.items(), key=lambda x: x[1])[0]
@@ -59,10 +101,39 @@ def detect_domain(text: str) -> str:
 
 
 def extract_experience_requirements(text: str) -> Dict:
-    """Extract years of experience requirements."""
+    """Extract years of experience requirements using NLP for better understanding."""
     normalized = text.lower()
     
-    # Patterns for experience ranges
+    nlp = get_nlp_model()
+    if nlp:
+        doc = nlp(text)
+        # Use dependency parsing to find experience requirements
+        for sent in doc.sents:
+            # Look for numeric entities and their relationships to "experience"
+            for token in sent:
+                if token.like_num and token.text.isdigit():
+                    # Check if this number is related to experience
+                    for child in token.children:
+                        if "year" in child.text.lower() or "experience" in child.text.lower():
+                            years = int(token.text)
+                            # Check for ranges
+                            if token.nbor(1).text in ["-", "–", "to"]:
+                                try:
+                                    end_years = int(token.nbor(2).text)
+                                    return {
+                                        "min_years": min(years, end_years),
+                                        "max_years": max(years, end_years),
+                                        "preferred_years": int((years + end_years) / 2)
+                                    }
+                                except (ValueError, IndexError):
+                                    pass
+                            return {
+                                "min_years": years,
+                                "max_years": years + 2,
+                                "preferred_years": years
+                            }
+    
+    # Fallback to regex patterns
     patterns = [
         r"(\d+)\s*[-–]\s*(\d+)\s*years?",
         r"(\d+)\+?\s*years?\s*(?:of\s*)?experience",
@@ -80,20 +151,17 @@ def extract_experience_requirements(text: str) -> Dict:
         for match in matches:
             groups = match.groups()
             if len(groups) == 2:
-                # Range found
                 start, end = int(groups[0]), int(groups[1])
                 min_years = min(start, end) if min_years is None else min(min_years, start)
                 max_years = max(start, end) if max_years is None else max(max_years, end)
                 preferred_years = (start + end) / 2
             elif len(groups) == 1:
-                # Single number
                 years = int(groups[0])
                 if min_years is None or years < min_years:
                     min_years = years
                 if max_years is None or years > max_years:
                     max_years = years
     
-    # Defaults if not found
     if min_years is None:
         min_years = 2
     if max_years is None:
@@ -108,19 +176,102 @@ def extract_experience_requirements(text: str) -> Dict:
     }
 
 
+def extract_skills_with_nlp(text: str, section_text: str, is_required: bool = True) -> List[str]:
+    """Extract skills and technologies using NLP dependency parsing."""
+    skills = []
+    nlp = get_nlp_model()
+    
+    if not nlp:
+        return skills
+    
+    doc = nlp(section_text)
+    
+    # Common skill-related patterns in dependency trees
+    skill_indicators = {
+        "experience with", "proficiency in", "knowledge of", "familiarity with",
+        "expertise in", "skills in", "ability to", "capable of"
+    }
+    
+    # Extract noun phrases that are likely skills/technologies
+    for sent in doc.sents:
+        # Look for technical terms (often proper nouns or compound nouns)
+        for token in sent:
+            # Skills are often nouns or proper nouns
+            if token.pos_ in ["NOUN", "PROPN"] and not token.is_stop:
+                # Check if it's part of a skill phrase
+                skill_text = token.text
+                
+                # Check for compound nouns (e.g., "financial modeling", "machine learning")
+                if token.head.pos_ == "NOUN" and token.dep_ in ["compound", "amod"]:
+                    # Get the full compound phrase
+                    phrase_tokens = [t.text for t in token.subtree if t.pos_ in ["NOUN", "PROPN", "ADJ"]]
+                    if len(phrase_tokens) > 1:
+                        skill_text = " ".join(phrase_tokens[:3])  # Limit to 3-word phrases
+                
+                # Check context - is this mentioned with skill indicators?
+                sent_lower = sent.text.lower()
+                if any(indicator in sent_lower for indicator in skill_indicators):
+                    if len(skill_text) > 2 and skill_text.lower() not in ["years", "experience", "degree"]:
+                        skills.append(skill_text.lower())
+                
+                # Also check for direct object relationships (e.g., "use Python", "know SQL")
+                if token.dep_ == "dobj" or token.dep_ == "pobj":
+                    # Check if the verb is skill-related
+                    verb = token.head
+                    if verb.pos_ == "VERB" and verb.lemma_ in ["use", "know", "have", "possess", "utilize"]:
+                        if len(skill_text) > 2:
+                            skills.append(skill_text.lower())
+    
+    # Extract entities that might be technologies/skills
+    for ent in doc.ents:
+        if ent.label_ in ["ORG", "PRODUCT", "EVENT"]:
+            ent_text = ent.text.lower()
+            # Filter out common non-skill entities
+            if ent_text not in ["years", "experience", "degree", "bachelor", "master"]:
+                if len(ent_text) > 2:
+                    skills.append(ent_text)
+    
+    # Extract from bullet points more intelligently
+    bullet_pattern = r"[•\-\*]\s*([^•\-\*\n]+)"
+    bullets = re.findall(bullet_pattern, section_text)
+    
+    for bullet in bullets:
+        bullet_doc = nlp(bullet)
+        # Extract the main noun phrases from bullet points
+        for chunk in bullet_doc.noun_chunks:
+            chunk_text = chunk.text.lower().strip()
+            # Filter out generic terms
+            if (len(chunk_text) > 3 and 
+                chunk_text not in ["years of", "experience in", "knowledge of", "the", "and", "or"]):
+                # Check if it contains a skill indicator
+                if any(word in chunk_text for word in ["experience", "proficiency", "knowledge", "skills", "degree"]):
+                    # Extract the actual skill (usually after "in" or "with")
+                    parts = re.split(r"\s+(?:in|with|of)\s+", chunk_text)
+                    if len(parts) > 1:
+                        skill = parts[-1].strip()
+                        if len(skill) > 2:
+                            skills.append(skill)
+                else:
+                    # Might be a skill itself
+                    if len(chunk_text.split()) <= 3:  # Limit to 3-word phrases
+                        skills.append(chunk_text)
+    
+    return list(set(skills))
+
+
 def extract_must_haves(text: str) -> List[str]:
-    """Extract must-have requirements using pattern matching."""
+    """Extract must-have requirements using NLP for better understanding."""
     normalized = text.lower()
     must_haves = []
     
-    # Sections that typically contain requirements
+    # Find sections that typically contain requirements
     requirement_sections = []
     
     # Find sections with "required", "must have", "essential", etc.
     section_patterns = [
-        r"(?:required|must have|essential|mandatory|qualifications|requirements)[\s\S]{0,500}",
-        r"minimum\s+requirements?[\s\S]{0,500}",
-        r"basic\s+qualifications?[\s\S]{0,500}",
+        r"(?:required|must have|essential|mandatory|qualifications|requirements)[\s\S]{0,1000}",
+        r"minimum\s+requirements?[\s\S]{0,1000}",
+        r"basic\s+qualifications?[\s\S]{0,1000}",
     ]
     
     for pattern in section_patterns:
@@ -128,14 +279,26 @@ def extract_must_haves(text: str) -> List[str]:
         for match in matches:
             requirement_sections.append(match.group(0))
     
-    # If no specific section found, use entire text
+    # If no specific section found, use entire text but focus on requirement-like sentences
     if not requirement_sections:
-        requirement_sections = [normalized]
+        nlp = get_nlp_model()
+        if nlp:
+            doc = nlp(text)
+            # Find sentences with requirement indicators
+            for sent in doc.sents:
+                sent_lower = sent.text.lower()
+                if any(word in sent_lower for word in ["required", "must", "essential", "mandatory", "minimum"]):
+                    requirement_sections.append(sent.text)
+        else:
+            requirement_sections = [normalized]
     
-    # Extract keywords from requirement sections
     all_text = " ".join(requirement_sections)
     
-    # Common must-have patterns
+    # Use NLP to extract skills
+    nlp_skills = extract_skills_with_nlp(text, all_text, is_required=True)
+    must_haves.extend(nlp_skills)
+    
+    # Also extract using traditional patterns for compatibility
     must_have_indicators = [
         r"required[:\s]+([^\.]+)",
         r"must\s+have[:\s]+([^\.]+)",
@@ -148,75 +311,155 @@ def extract_must_haves(text: str) -> List[str]:
         matches = re.finditer(pattern, all_text, re.IGNORECASE)
         for match in matches:
             phrase = match.group(1).strip()
-            if len(phrase) > 3:  # Filter out very short phrases
+            if len(phrase) > 3:
                 extracted_phrases.append(phrase)
     
-    # Extract common technical terms and skills
-    # Look for bullet points or list items
+    # Extract bullet points
     bullet_pattern = r"[•\-\*]\s*([^•\-\*\n]+)"
     bullets = re.findall(bullet_pattern, all_text)
     
-    # Combine extracted phrases and bullets
-    all_candidates = extracted_phrases + bullets
+    # Process bullets with NLP - extract actual skills and technologies
+    for bullet in bullets:
+        bullet_clean = bullet.strip()
+        if len(bullet_clean) > 5:
+            # Extract key information from bullet
+            nlp = get_nlp_model()
+            if nlp:
+                bullet_doc = nlp(bullet_clean)
+                
+                # Look for specific patterns: "X in Y", "X with Y", "experience with Y"
+                # Extract the technology/skill (usually the object)
+                for token in bullet_doc:
+                    # Find technologies/tools (often proper nouns or specific nouns)
+                    if token.pos_ == "PROPN" or (token.pos_ == "NOUN" and token.text[0].isupper()):
+                        skill = token.text.lower()
+                        # Check if it's part of a compound (e.g., "Python programming")
+                        if token.head.pos_ in ["NOUN", "VERB"]:
+                            # Get compound phrase
+                            compound = [t.text.lower() for t in token.subtree 
+                                       if t.pos_ in ["NOUN", "PROPN", "ADJ"] and not t.is_stop]
+                            if len(compound) > 1:
+                                skill = " ".join(compound[:2])
+                        if len(skill) > 2 and skill not in ["years", "experience", "degree"]:
+                            must_haves.append(skill)
+                    
+                    # Extract skills from "proficiency in X", "experience with X", etc.
+                    if token.lemma_ in ["proficiency", "experience", "knowledge", "familiarity"]:
+                        # Find the object of this preposition
+                        for child in token.children:
+                            if child.dep_ == "prep":  # preposition
+                                for grandchild in child.children:
+                                    if grandchild.dep_ == "pobj":  # object of preposition
+                                        skill = grandchild.text.lower()
+                                        # Get compound if exists
+                                        if grandchild.head.pos_ in ["NOUN", "PROPN"]:
+                                            compound = [t.text.lower() for t in grandchild.subtree 
+                                                       if t.pos_ in ["NOUN", "PROPN", "ADJ"] and not t.is_stop]
+                                            if len(compound) > 1:
+                                                skill = " ".join(compound[:2])
+                                        if len(skill) > 2:
+                                            must_haves.append(skill)
+                
+                # Also extract noun phrases that look like skills
+                for chunk in bullet_doc.noun_chunks:
+                    chunk_text = chunk.text.lower().strip()
+                    # Skip if it's too generic
+                    if (len(chunk_text) > 3 and 
+                        chunk_text not in ["years of", "experience in", "knowledge of", 
+                                          "the", "and", "or", "minimum", "required"]):
+                        # Extract skill from patterns like "X experience", "X proficiency"
+                        if "experience" in chunk_text or "proficiency" in chunk_text:
+                            parts = re.split(r"\s+(?:in|with|of)\s+", chunk_text)
+                            if len(parts) > 1:
+                                skill = parts[-1].strip()
+                                if len(skill) > 2:
+                                    must_haves.append(skill)
+                        elif "degree" in chunk_text:
+                            # Extract degree field
+                            parts = re.split(r"\s+degree\s+(?:in\s+)?", chunk_text)
+                            if len(parts) > 1:
+                                field = parts[-1].strip()
+                                if len(field) > 2:
+                                    must_haves.append(f"bachelor's degree in {field}")
+                        else:
+                            # Might be a skill itself if it's a technical term
+                            if len(chunk_text.split()) <= 3:
+                                must_haves.append(chunk_text)
+            else:
+                # Fallback: extract key terms
+                words = re.findall(r'\b\w+\b', bullet_clean.lower())
+                # Remove stop words
+                stop_words = {"the", "a", "an", "and", "or", "in", "on", "at", "with", "for", "of", "minimum", "required"}
+                key_words = [w for w in words if w not in stop_words and len(w) > 3]
+                if key_words:
+                    must_haves.append(" ".join(key_words[:3]))
     
-    # Extract key terms (2-3 word phrases that are likely skills)
-    # Common patterns: "X experience", "X degree", "X certification"
-    skill_patterns = [
-        r"(\w+\s+\w+)\s+(?:experience|degree|certification|knowledge|proficiency)",
-        r"(?:bachelor|master|phd|bs|ms|ph\.?d\.?)\s+(?:in\s+)?(\w+(?:\s+\w+)?)",
-        r"(\w+\s+\w+)\s+required",
+    # Extract degree requirements
+    degree_patterns = [
+        r"(?:bachelor|master|phd|bs|ms|ph\.?d\.?)\s+(?:degree\s+)?(?:in\s+)?([^,\.]+)",
     ]
-    
-    for pattern in skill_patterns:
+    for pattern in degree_patterns:
         matches = re.finditer(pattern, all_text, re.IGNORECASE)
         for match in matches:
-            term = match.group(1).strip().lower()
-            if len(term) > 3 and term not in ["the", "and", "for", "with"]:
-                must_haves.append(term)
+            degree_field = match.group(1).strip().lower()
+            if len(degree_field) > 2:
+                must_haves.append(f"bachelor's degree in {degree_field}")
     
-    # Extract single important keywords (common technical terms)
-    # Focus on specific skills/tools, not generic terms
-    important_keywords = [
-        "bachelor", "degree", "certification", "license"
-    ]
-    
-    # Also look for domain-specific must-haves
+    # Domain-specific must-haves
     domain = detect_domain(text)
-    if domain == "electrical":
-        important_keywords.extend(["cape", "aspen", "protection", "short circuit", "power systems", 
-                                   "transmission", "relay", "breaker", "substation"])
-    elif domain == "software":
-        important_keywords.extend(["programming", "coding", "development", "api", "javascript", 
-                                   "python", "java", "react", "node"])
-    elif domain == "data":
-        important_keywords.extend(["sql", "python", "analytics", "statistics", "machine learning"])
+    domain_keywords = {
+        "electrical": ["cape", "aspen", "protection", "short circuit", "power systems", 
+                       "transmission", "relay", "breaker", "substation"],
+        "software": ["programming", "coding", "development", "api", "javascript", 
+                     "python", "java", "react", "node"],
+        "data": ["sql", "python", "analytics", "statistics", "machine learning"],
+        "financial": ["excel", "financial modeling", "financial analysis", "valuation", 
+                      "dcf", "financial statements", "accounting", "cfa", "mba"],
+        "mechanical": ["cad", "solidworks", "autocad", "manufacturing", "design"]
+    }
     
-    # Financial domain keywords
-    if "financial" in normalized or "finance" in normalized or "banking" in normalized:
-        important_keywords.extend(["excel", "financial modeling", "financial analysis", "valuation", 
-                                   "dcf", "financial statements", "accounting", "cfa", "mba"])
-    elif domain == "mechanical":
-        important_keywords.extend(["cad", "solidworks", "autocad", "manufacturing", "design"])
-    
-    # Extract these keywords if they appear in requirement sections
-    for keyword in important_keywords:
-        if keyword in all_text:
-            must_haves.append(keyword)
+    if domain in domain_keywords:
+        for keyword in domain_keywords[domain]:
+            if keyword in all_text:
+                must_haves.append(keyword)
     
     # Deduplicate and clean
     must_haves = list(set([mh.strip() for mh in must_haves if len(mh.strip()) > 2]))
     
-    # Filter out generic terms that aren't useful
+    # Filter out generic terms and single-word generic nouns
     generic_terms = {"years", "experience", "knowledge", "proficiency", "required", 
-                     "must", "have", "essential", "and", "the", "with", "of", "in"}
-    must_haves = [mh for mh in must_haves if mh.lower() not in generic_terms]
+                     "must", "have", "essential", "and", "the", "with", "of", "in",
+                     "minimum", "qualifications", "requirements", "troubleshoot",
+                     "exposure", "machine", "web", "detail", "build", "company",
+                     "responsibilities", "applications", "teams", "participate",
+                     "reviews", "platforms", "qualifications", "skills", "presentations",
+                     "transactions", "research", "forecasts", "projections", "level"}
     
-    # Limit to top 10-15 most relevant
+    # More aggressive filtering
+    filtered_must_haves = []
+    for mh in must_haves:
+        mh_lower = mh.lower()
+        # Skip if it's a generic term or contains only generic words
+        if mh_lower in generic_terms:
+            continue
+        # Skip single words that are too generic (unless they're technical terms)
+        if len(mh.split()) == 1 and mh_lower in ["master", "bachelor", "degree"]:
+            continue
+        # Skip if it's mostly generic words
+        words = mh_lower.split()
+        generic_word_count = sum(1 for w in words if w in generic_terms)
+        if len(words) > 0 and generic_word_count / len(words) > 0.5:
+            continue
+        filtered_must_haves.append(mh)
+    
+    must_haves = filtered_must_haves
+    
+    # Limit to top 15 most relevant
     return must_haves[:15]
 
 
 def extract_nice_to_haves(text: str) -> List[str]:
-    """Extract nice-to-have/preferred requirements."""
+    """Extract nice-to-have/preferred requirements using NLP."""
     normalized = text.lower()
     nice_to_haves = []
     
@@ -224,8 +467,8 @@ def extract_nice_to_haves(text: str) -> List[str]:
     preferred_sections = []
     
     preferred_patterns = [
-        r"(?:preferred|nice to have|plus|bonus|advantage)[\s\S]{0,500}",
-        r"additional\s+qualifications?[\s\S]{0,500}",
+        r"(?:preferred|nice to have|plus|bonus|advantage)[\s\S]{0,1000}",
+        r"additional\s+qualifications?[\s\S]{0,1000}",
     ]
     
     for pattern in preferred_patterns:
@@ -233,17 +476,52 @@ def extract_nice_to_haves(text: str) -> List[str]:
         for match in matches:
             preferred_sections.append(match.group(0))
     
-    # If no specific section, look for "preferred" mentions throughout
+    # If no specific section, use NLP to find preferred sentences
     if not preferred_sections:
-        # Look for sentences with "preferred"
-        sentences = re.split(r'[.!?]+', normalized)
-        preferred_sections = [s for s in sentences if "preferred" in s or "plus" in s or "bonus" in s]
+        nlp = get_nlp_model()
+        if nlp:
+            doc = nlp(text)
+            for sent in doc.sents:
+                sent_lower = sent.text.lower()
+                if any(word in sent_lower for word in ["preferred", "nice to have", "plus", "bonus", "advantage"]):
+                    preferred_sections.append(sent.text)
+        else:
+            sentences = re.split(r'[.!?]+', normalized)
+            preferred_sections = [s for s in sentences if "preferred" in s or "plus" in s or "bonus" in s]
     
     all_text = " ".join(preferred_sections) if preferred_sections else normalized
     
-    # Extract bullet points from preferred sections
+    # Use NLP to extract skills
+    nlp_skills = extract_skills_with_nlp(text, all_text, is_required=False)
+    nice_to_haves.extend(nlp_skills)
+    
+    # Extract bullet points
     bullet_pattern = r"[•\-\*]\s*([^•\-\*\n]+)"
     bullets = re.findall(bullet_pattern, all_text)
+    
+    # Process bullets with NLP
+    for bullet in bullets:
+        bullet_clean = bullet.strip()
+        if len(bullet_clean) > 5:
+            nlp = get_nlp_model()
+            if nlp:
+                bullet_doc = nlp(bullet_clean)
+                important_words = [t.text.lower() for t in bullet_doc 
+                                 if t.pos_ in ["NOUN", "PROPN"] and not t.is_stop]
+                if important_words:
+                    if len(important_words) >= 2:
+                        phrase = " ".join(important_words[:3])
+                        if len(phrase) > 3:
+                            nice_to_haves.append(phrase)
+                    else:
+                        if len(important_words[0]) > 3:
+                            nice_to_haves.append(important_words[0])
+            else:
+                words = re.findall(r'\b\w+\b', bullet_clean.lower())
+                stop_words = {"the", "a", "an", "and", "or", "in", "on", "at", "with", "for", "of", "preferred"}
+                key_words = [w for w in words if w not in stop_words and len(w) > 3]
+                if key_words:
+                    nice_to_haves.append(" ".join(key_words[:3]))
     
     # Extract skill patterns
     skill_patterns = [
@@ -258,10 +536,11 @@ def extract_nice_to_haves(text: str) -> List[str]:
             if len(term) > 3:
                 nice_to_haves.append(term)
     
-    # Add common nice-to-have keywords
+    # Add common nice-to-have keywords if mentioned
     nice_keywords = [
         "sql", "python", "excel", "power bi", "tableau", "agile", "scrum",
-        "certification", "master", "advanced", "leadership", "communication"
+        "certification", "master", "advanced", "leadership", "communication",
+        "aws", "azure", "docker", "kubernetes", "machine learning", "ai"
     ]
     
     for keyword in nice_keywords:
@@ -271,18 +550,46 @@ def extract_nice_to_haves(text: str) -> List[str]:
     # Deduplicate and clean
     nice_to_haves = list(set([nh.strip() for nh in nice_to_haves if len(nh.strip()) > 2]))
     
+    # Filter out generic terms
+    generic_terms = {"years", "experience", "knowledge", "proficiency", "preferred",
+                     "nice", "have", "plus", "bonus", "and", "the", "with", "of", "in",
+                     "additional", "qualifications", "troubleshoot", "exposure", "machine",
+                     "web", "detail", "build", "company", "responsibilities", "applications",
+                     "teams", "participate", "reviews", "platforms", "qualifications",
+                     "skills", "presentations", "transactions", "research", "forecasts",
+                     "projections", "level", "knowledge", "methodology"}
+    
+    filtered_nice_to_haves = []
+    for nh in nice_to_haves:
+        nh_lower = nh.lower()
+        if nh_lower in generic_terms:
+            continue
+        # Skip if it's mostly generic words
+        words = nh_lower.split()
+        generic_word_count = sum(1 for w in words if w in generic_terms)
+        if len(words) > 0 and generic_word_count / len(words) > 0.5:
+            continue
+        filtered_nice_to_haves.append(nh)
+    
+    nice_to_haves = filtered_nice_to_haves
+    
     return nice_to_haves[:25]
 
 
 def extract_title_keywords(text: str, job_title: str = None) -> List[str]:
-    """Extract title keywords for role alignment."""
+    """Extract title keywords for role alignment using NLP."""
     if job_title:
-        # Extract keywords from job title
-        title_words = re.findall(r'\b\w+\b', job_title.lower())
-        return [w for w in title_words if len(w) > 3][:10]
+        nlp = get_nlp_model()
+        if nlp:
+            doc = nlp(job_title)
+            # Extract important nouns and proper nouns
+            keywords = [t.text.lower() for t in doc if t.pos_ in ["NOUN", "PROPN"] and len(t.text) > 3]
+            return keywords[:10]
+        else:
+            title_words = re.findall(r'\b\w+\b', job_title.lower())
+            return [w for w in title_words if len(w) > 3][:10]
     
     # Try to extract from text
-    # Look for "Job Title:", "Position:", etc.
     title_patterns = [
         r"(?:job\s+title|position|role)[:\s]+([^\n]+)",
         r"^([A-Z][^:]+?)(?:\s+Job|\s+Position)",
@@ -292,17 +599,23 @@ def extract_title_keywords(text: str, job_title: str = None) -> List[str]:
         match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         if match:
             title = match.group(1).strip()
-            title_words = re.findall(r'\b\w+\b', title.lower())
-            return [w for w in title_words if len(w) > 3][:10]
+            nlp = get_nlp_model()
+            if nlp:
+                doc = nlp(title)
+                keywords = [t.text.lower() for t in doc if t.pos_ in ["NOUN", "PROPN"] and len(t.text) > 3]
+                return keywords[:10]
+            else:
+                title_words = re.findall(r'\b\w+\b', title.lower())
+                return [w for w in title_words if len(w) > 3][:10]
     
-    # Fallback: extract common role-related words
+    # Fallback
     common_role_words = ["engineer", "analyst", "developer", "manager", "specialist", "coordinator"]
     found = [w for w in common_role_words if w in text.lower()]
     return found[:10]
 
 
 def extract_job_title(text: str) -> str:
-    """Extract job title from text."""
+    """Extract job title from text using NLP."""
     title_patterns = [
         r"(?:job\s+title|position|role)[:\s]+([^\n]+)",
         r"^([A-Z][^:]+?)(?:\s+Job|\s+Position)",
@@ -313,6 +626,19 @@ def extract_job_title(text: str) -> str:
         match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         if match:
             return match.group(1).strip()
+    
+    # Use NLP to find the title in first few sentences
+    nlp = get_nlp_model()
+    if nlp:
+        first_para = text.split('\n\n')[0] if '\n\n' in text else text.split('\n')[0]
+        doc = nlp(first_para)
+        # Look for proper nouns or noun phrases at the start
+        for sent in doc.sents[:2]:  # Check first 2 sentences
+            # If sentence is short and contains role words, it might be the title
+            if len(sent.text) < 100:
+                role_words = ["engineer", "analyst", "developer", "manager", "specialist", "director"]
+                if any(word in sent.text.lower() for word in role_words):
+                    return sent.text.strip()
     
     # Try first line if it looks like a title
     first_line = text.split('\n')[0].strip()
@@ -340,8 +666,19 @@ def generate_jd_meta(
     title_keywords = extract_title_keywords(text, job_title)
     experience = extract_experience_requirements(text)
     
-    # Generate summary
-    summary = text[:200].replace('\n', ' ').strip() + "..."
+    # Generate summary using NLP if available
+    nlp = get_nlp_model()
+    if nlp:
+        doc = nlp(text)
+        # Get first sentence or first 200 chars
+        if doc.sents:
+            summary = next(doc.sents).text
+            if len(summary) > 200:
+                summary = summary[:200] + "..."
+        else:
+            summary = text[:200].replace('\n', ' ').strip() + "..."
+    else:
+        summary = text[:200].replace('\n', ' ').strip() + "..."
     
     # Build YAML structure
     jd_meta = {
@@ -366,24 +703,26 @@ def generate_jd_meta(
             "advance": 0.72,
             "review": 0.50
         },
-        "notes": f"Auto-generated from job description. Domain: {domain}"
+        "notes": f"Auto-generated from job description using NLP. Domain: {domain}"
     }
     
     # Write YAML file
     with open(output_path, 'w', encoding='utf-8') as f:
         yaml.dump(jd_meta, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
     
-    print(f"✓ Generated jd_meta.yaml at {output_path}")
+    print(f"Generated jd_meta.yaml at {output_path}")
     print(f"  Domain: {domain}")
     print(f"  Must-haves: {len(must_haves)}")
     print(f"  Nice-to-haves: {len(nice_to_haves)}")
     print(f"  Experience: {experience['min_years']}-{experience['max_years']} years")
+    if NLP_AVAILABLE and get_nlp_model():
+        print("  Using NLP-enhanced parsing")
 
 
 def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Auto-extract job requirements and generate jd_meta.yaml"
+        description="Auto-extract job requirements and generate jd_meta.yaml (NLP-enhanced, Ollama-aware)"
     )
     parser.add_argument(
         "input",
@@ -408,6 +747,19 @@ def main() -> None:
         default=None,
         help="Requisition ID (optional)",
     )
+    parser.add_argument(
+        "--llm",
+        dest="llm",
+        action="store_true",
+        default=True,
+        help="Use Ollama LLM for analysis (default: True; falls back to rules if unavailable)",
+    )
+    parser.add_argument(
+        "--no-llm",
+        dest="llm",
+        action="store_false",
+        help="Force rule-based analysis (skip LLM)",
+    )
     args = parser.parse_args()
     
     # Read input
@@ -423,16 +775,15 @@ def main() -> None:
         print("Error: Empty job description")
         return
     
-    # Generate metadata
-    generate_jd_meta(
+    # Generate metadata (LLM hybrid)
+    analyze_jd_hybrid(
         text,
         args.output,
+        use_llm=args.llm,
         job_title=args.title,
-        requisition_id=args.req_id
+        requisition_id=args.req_id,
     )
 
 
 if __name__ == "__main__":
-    import sys
     main()
-

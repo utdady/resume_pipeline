@@ -1,13 +1,34 @@
-"""Rule-based resume scoring for Electrical Engineer 2 - Protection & Control position."""
+"""NLP-enhanced resume scoring with detailed per-candidate reports."""
 import argparse
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, Optional
 
 import pandas as pd
 import yaml
 
 from parser import extract_text
+
+try:
+    import spacy
+    NLP_AVAILABLE = True
+except ImportError:
+    NLP_AVAILABLE = False
+
+# Global NLP model (lazy loaded)
+_nlp_model = None
+
+def get_nlp_model():
+    """Lazy load spaCy model."""
+    global _nlp_model
+    if not NLP_AVAILABLE:
+        return None
+    if _nlp_model is None:
+        try:
+            _nlp_model = spacy.load("en_core_web_sm")
+        except OSError:
+            return None
+    return _nlp_model
 
 
 def load_config(config_path: Path) -> Dict:
@@ -21,15 +42,92 @@ def normalize_text(text: str) -> str:
     return text.lower().strip()
 
 
-def find_keywords(text: str, keywords: List[str]) -> Set[str]:
-    """Find which keywords appear in the text (case-insensitive)."""
+def find_keywords_nlp(text: str, keyword: str, nlp_model) -> bool:
+    """Use NLP to find if a keyword appears in context (more human-like)."""
+    if not nlp_model:
+        return False
+    
+    doc = nlp_model(text)
+    keyword_lower = keyword.lower()
+    keyword_words = keyword_lower.split()
+    text_lower = text.lower()
+    
+    # Check for exact phrase match first
+    if keyword_lower in text_lower:
+        return True
+    
+    # For compound terms, check if words appear together in context
+    if len(keyword_words) > 1:
+        # Check if all words appear in the same sentence or nearby sentences
+        for sent in doc.sents:
+            sent_lower = sent.text.lower()
+            sent_tokens = [t.text.lower() for t in sent]
+            
+            # Check if all keyword words appear in this sentence
+            if all(word in sent_lower for word in keyword_words):
+                # Find positions of each word
+                word_positions = []
+                for word in keyword_words:
+                    try:
+                        # Find all occurrences of the word
+                        positions = [i for i, w in enumerate(sent_tokens) if w == word]
+                        if positions:
+                            word_positions.append(positions)
+                    except:
+                        break
+                
+                # If we found all words, check if they're reasonably close
+                if len(word_positions) == len(keyword_words):
+                    # Check proximity - words should be within 8 tokens of each other
+                    all_positions = [pos for positions in word_positions for pos in positions]
+                    if max(all_positions) - min(all_positions) <= 8:
+                        return True
+        
+        # Also check for variations (e.g., "financial modeling" vs "modeling financial")
+        # by checking if words appear in noun chunks together
+        for chunk in doc.noun_chunks:
+            chunk_text = chunk.text.lower()
+            if all(word in chunk_text for word in keyword_words):
+                return True
+    
+    # Check for lemmatized forms (e.g., "experience" matches "experienced", "experiences")
+    keyword_doc = nlp_model(keyword)
+    if keyword_doc:
+        keyword_lemma = keyword_doc[0].lemma_ if len(keyword_doc) > 0 else keyword_lower
+        for token in doc:
+            if token.lemma_.lower() == keyword_lemma.lower():
+                return True
+    
+    return False
+
+
+def find_keywords(text: str, keywords: List[str], use_nlp: bool = True) -> Set[str]:
+    """Find which keywords appear in the text (case-insensitive, with optional NLP)."""
     normalized = normalize_text(text)
     found = set()
+    nlp_model = get_nlp_model() if use_nlp else None
+    
     for keyword in keywords:
-        # Use word boundaries for better matching
-        pattern = r"\b" + re.escape(keyword.lower()) + r"\b"
-        if re.search(pattern, normalized):
-            found.add(keyword.lower())
+        keyword_lower = keyword.lower()
+        
+        # Try NLP-enhanced matching first if available
+        if nlp_model and use_nlp:
+            if find_keywords_nlp(text, keyword, nlp_model):
+                found.add(keyword_lower)
+                continue
+        
+        # Fallback to regex matching
+        # Handle multi-word keywords better
+        if ' ' in keyword_lower:
+            # For phrases, check if all words appear in order
+            pattern = r"\b" + r"\s+".join([re.escape(word) for word in keyword_lower.split()]) + r"\b"
+        else:
+            # Single word - use word boundaries
+            pattern = r"\b" + re.escape(keyword_lower) + r"\b"
+        
+        if re.search(pattern, normalized, re.IGNORECASE):
+            found.add(keyword_lower)
+    
     return found
 
 
@@ -69,28 +167,30 @@ def extract_years_experience(text: str) -> float:
     return 0.0
 
 
-def score_must_have_coverage(text: str, must_haves: List[str]) -> Tuple[float, List[str]]:
+def score_must_have_coverage(text: str, must_haves: List[str]) -> Tuple[float, List[str], List[str]]:
     """Score based on must-have keyword coverage (0-1)."""
-    found = find_keywords(text, must_haves)
+    found_lower = find_keywords(text, must_haves)
     total = len(must_haves)
     if total == 0:
-        return 1.0, []
+        return 1.0, [], []
     
+    found = [mh for mh in must_haves if mh.lower() in found_lower]
     score = len(found) / total
-    missing = [mh for mh in must_haves if mh.lower() not in found]
-    return score, missing
+    missing = [mh for mh in must_haves if mh.lower() not in found_lower]
+    return score, missing, found
 
 
 def score_skill_overlap(text: str, nice_to_haves: List[str]) -> Tuple[float, List[str]]:
     """Score based on nice-to-have keyword overlap (0-1)."""
-    found = find_keywords(text, nice_to_haves)
+    found_lower = find_keywords(text, nice_to_haves)
     total = len(nice_to_haves)
     if total == 0:
         return 0.0, []
     
+    found = [nh for nh in nice_to_haves if nh.lower() in found_lower]
     # Cap at 1.0, but allow bonus for many matches
     score = min(len(found) / max(total * 0.5, 10), 1.0)  # Normalize to reasonable range
-    return score, list(found)
+    return score, found
 
 
 def score_title_similarity(text: str, title_keywords: List[str]) -> float:
@@ -194,6 +294,55 @@ def generate_explanation(
     return " | ".join(parts)
 
 
+def generate_candidate_report(
+    resume_name: str,
+    must_haves: List[str],
+    nice_to_haves: List[str],
+    found_must_haves: List[str],
+    found_nice_to_haves: List[str],
+    reports_dir: Path,
+) -> Tuple[Optional[Path], Optional[Path]]:
+    """Create CSV and Excel reports showing binary coverage for each requirement."""
+    if not reports_dir:
+        return None, None
+    
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    found_must = {mh.lower() for mh in found_must_haves}
+    found_nice = {nh.lower() for nh in found_nice_to_haves}
+    
+    rows = []
+    for mh in must_haves:
+        rows.append({
+            "requirement": mh,
+            "category": "must_have",
+            "met_binary": 1 if mh.lower() in found_must else 0,
+            "met": "Yes" if mh.lower() in found_must else "No",
+        })
+    
+    for nh in nice_to_haves:
+        rows.append({
+            "requirement": nh,
+            "category": "nice_to_have",
+            "met_binary": 1 if nh.lower() in found_nice else 0,
+            "met": "Yes" if nh.lower() in found_nice else "No",
+        })
+    
+    df = pd.DataFrame(rows)
+    resume_stem = Path(resume_name).stem
+    csv_path = reports_dir / f"{resume_stem}_requirements.csv"
+    excel_path = reports_dir / f"{resume_stem}_requirements.xlsx"
+    
+    df.to_csv(csv_path, index=False)
+    
+    try:
+        df.to_excel(excel_path, index=False)
+    except Exception as exc:
+        print(f"Warning: failed to write Excel report for {resume_name}: {exc}")
+        excel_path = None
+    
+    return csv_path, excel_path
+
+
 def score_resume(resume_path: Path, config: Dict) -> Dict:
     """Score a single resume against the job description."""
     try:
@@ -218,7 +367,7 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
     thresholds = config.get("thresholds", {})
     
     # Calculate component scores
-    must_have_score, missing_must_haves = score_must_have_coverage(text, must_haves)
+    must_have_score, missing_must_haves, found_must_haves = score_must_have_coverage(text, must_haves)
     skill_score, found_skills = score_skill_overlap(text, nice_to_haves)
     title_score = score_title_similarity(text, title_keywords)
     
@@ -268,6 +417,9 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
         "skill_overlap": round(skill_score, 3),
         "title_similarity": round(title_score, 3),
         "years_score": round(years_score, 3),
+        "found_must_haves": found_must_haves,
+        "found_nice_to_haves": found_skills,
+        "missing_must_haves": missing_must_haves,
     }
 
 
@@ -293,6 +445,17 @@ def main() -> None:
         type=Path,
         default=Path("scores.csv"),
         help="Output CSV file path (default: scores.csv)",
+    )
+    parser.add_argument(
+        "--reports-dir",
+        type=Path,
+        default=Path("candidate_reports"),
+        help="Directory to store per-candidate requirement reports (CSV & Excel)",
+    )
+    parser.add_argument(
+        "--no-reports",
+        action="store_true",
+        help="Disable generation of per-candidate requirement reports",
     )
     args = parser.parse_args()
     
@@ -331,10 +494,34 @@ def main() -> None:
     for resume_path in resume_files:
         print(f"  Scoring {resume_path.name}...")
         result = score_resume(resume_path, config)
+        
+        # Generate per-candidate requirement reports unless disabled
+        if not args.no_reports and args.reports_dir:
+            csv_report, excel_report = generate_candidate_report(
+                resume_path.name,
+                config.get("must_haves", []),
+                config.get("nice_to_haves", []),
+                result.get("found_must_haves", []),
+                result.get("found_nice_to_haves", []),
+                args.reports_dir,
+            )
+            if csv_report:
+                result["requirement_report_csv"] = str(csv_report)
+            if excel_report:
+                result["requirement_report_excel"] = str(excel_report)
+        
         results.append(result)
     
     # Create DataFrame and sort by score
-    df = pd.DataFrame(results)
+    summary_rows = []
+    for res in results:
+        summary = res.copy()
+        summary.pop("found_must_haves", None)
+        summary.pop("found_nice_to_haves", None)
+        summary.pop("missing_must_haves", None)
+        summary_rows.append(summary)
+    
+    df = pd.DataFrame(summary_rows)
     df = df.sort_values("score", ascending=False).reset_index(drop=True)
     
     # Save to CSV

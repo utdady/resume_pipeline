@@ -10,7 +10,8 @@ import streamlit as st
 import yaml
 
 from baseline import score_resume, load_config
-from jd_analyzer import generate_jd_meta
+from jd_analyzer_llm import analyze_jd_with_llm
+from jd_analyzer import generate_jd_meta  # Assuming this is importable
 from parser import extract_text
 
 
@@ -194,30 +195,45 @@ def show_scoring_page():
             help="Optional identifier for this job posting"
         )
     
-    analyze_button = st.button("🔍 Analyze Job Description", use_container_width=True)
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        analyze_button = st.button("🔍 Analyze Job Description", use_container_width=True)
+    with col2:
+        use_llm = st.checkbox("🧠 AI", value=True, help="Use Ollama AI for smarter analysis")
     
     if analyze_button:
         if not jd_text.strip():
             st.error("❌ Please upload or paste a job description before analyzing.")
         else:
             try:
+                from jd_analyzer_llm import analyze_jd_hybrid, check_ollama_available
+                
+                if use_llm and not check_ollama_available():
+                    st.warning("⚠️ Ollama not running. Using rule-based analysis instead.")
+                    st.info("To use AI: Install Ollama and run 'ollama serve' (see setup_ollama.md)")
+                    use_llm = False
+                
                 with st.spinner("Analyzing job description and generating YAML config..."):
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml") as tmp_yaml:
                         config_path = Path(tmp_yaml.name)
                     
-                    generate_jd_meta(
+                    config = analyze_jd_hybrid(
                         jd_text,
                         config_path,
+                        use_llm=use_llm,
                         job_title=job_title,
                         requisition_id=req_id
                     )
-                    config = load_config(config_path)
+                    
                     st.session_state["base_config"] = config
                     st.session_state["custom_config"] = copy.deepcopy(config)
-                    st.session_state["config_yaml"] = config_path.read_text(encoding="utf-8")
+                    st.session_state["config_yaml"] = yaml.dump(config, sort_keys=False, allow_unicode=True)
                     st.session_state["job_title"] = config.get("job", {}).get("title", "Job Position")
                 
-                st.success("✅ Job description analyzed! Review and customize the requirements below.")
+                if "Ollama" in config.get("notes", ""):
+                    st.success("✅ Job description analyzed with Ollama AI! Review and customize below.")
+                else:
+                    st.success("✅ Job description analyzed with rule-based system! Review and customize below.")
             except Exception as e:
                 st.error(f"❌ Error analyzing job description: {e}")
                 st.exception(e)

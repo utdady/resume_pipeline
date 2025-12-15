@@ -42,7 +42,25 @@ cat scores.csv
    py -3.11 -m pip install -r requirements.txt
    ```
 
-2. **Two ways to use the pipeline:**
+2. **Install NLP model (for enhanced JD parsing and resume scoring):**
+   ```bash
+   # Option 1: Use the setup script
+   python setup_nlp.py
+   
+   # Option 2: Manual installation
+   python -m spacy download en_core_web_sm
+   ```
+   
+   The NLP pipeline powers both job description analysis and resume scoring by:
+   - Using dependency parsing to understand relationships (e.g., "3 years of Python experience")
+   - Identifying skills and technologies through Named Entity Recognition
+   - Matching compound skill phrases and synonyms in resumes (e.g., "financial modeling" vs "model financials")
+   - Better distinguishing between must-haves and nice-to-haves using linguistic context
+   - Extracting compound phrases and technical terms more accurately
+   
+   **Note:** The parser and scorer will work without spaCy but will fall back to basic regex parsing.
+
+3. **Two ways to use the pipeline:**
 
    **Option A: Use existing jd_meta.yaml** (for predefined job descriptions)
    - The default `jd_meta.yaml` is configured for Electrical Engineer 2 position
@@ -70,11 +88,42 @@ py -3.11 jd_analyzer.py job_description.txt --title "Software Engineer" --req-id
 ```
 
 The analyzer will:
-- Detect domain (software/electrical/mechanical/data/business)
-- Extract must-have requirements
-- Extract nice-to-have skills
-- Parse experience requirements (e.g., "4-6 years")
+- Detect domain (software/electrical/mechanical/data/business) using NLP context analysis
+- Extract must-have requirements using dependency parsing and entity recognition
+- Extract nice-to-have skills with better context understanding
+- Parse experience requirements (e.g., "4-6 years") using linguistic analysis
 - Generate `jd_meta.yaml` configuration
+
+### AI-Powered JD Analysis with Ollama (Optional)
+
+For higher-quality requirement extraction you can use a local LLM via **Ollama**.
+
+- See `setup_ollama.md` for installation and model setup.
+- The system automatically falls back to the rule-based analyzer if Ollama is not available.
+
+**CLI:**
+```bash
+# Use LLM when available (default behavior)
+py -3.11 jd_analyzer.py job_description.txt --output jd_meta.yaml
+
+# Force LLM on (will fallback safely if Ollama isn't running)
+py -3.11 jd_analyzer.py job_description.txt --llm --output jd_meta.yaml
+
+# Force rule-based only (skip LLM entirely)
+py -3.11 jd_analyzer.py job_description.txt --no-llm --output jd_meta.yaml
+```
+
+**Streamlit UI (`app.py`):**
+- Go to **Score Resumes → Step 1**.
+- Upload or paste a job description.
+- Use the **🧠 AI** checkbox to enable/disable Ollama JD analysis.
+- If Ollama isn't running, the UI will show a warning and automatically use the rule-based analyzer.
+
+**NLP Features:**
+- Understands relationships between skills and experience levels
+- Extracts compound technical terms (e.g., "financial modeling", "machine learning")
+- Better identifies requirements vs preferences through linguistic cues
+- Processes bullet points and structured text more intelligently
 
 ### Step 2: Score Resumes
 
@@ -93,6 +142,15 @@ py -3.11 baseline.py resume1.pdf resume2.docx resume3.txt
 py -3.11 baseline.py resumes/
 ```
 
+**Generate per-candidate requirement matrices (CSV + Excel):**
+```bash
+# Default reports folder: candidate_reports/
+py -3.11 baseline.py resumes/ --config jd_meta.yaml --output results.csv --reports-dir candidate_reports
+
+# Skip report generation if you only want the summary CSV
+py -3.11 baseline.py resumes/ --config jd_meta.yaml --no-reports
+```
+
 **Use custom config file:**
 ```bash
 py -3.11 baseline.py resumes/ --config jd_meta_auto.yaml
@@ -102,6 +160,12 @@ py -3.11 baseline.py resumes/ --config jd_meta_auto.yaml
 ```bash
 py -3.11 baseline.py resumes/ --output results.csv
 ```
+
+### NLP-Enhanced Resume Reading
+
+- spaCy dependency parsing + noun-phrase matching catches compound skills (REST APIs, financial modeling, etc.)
+- Keyword detection works even when resumes paraphrase requirements (e.g., "experience building REST services")
+- Every candidate now receives a binary grade for each must-have and nice-to-have in both CSV and Excel form for quick auditing
 
 ### Helper Tools
 
