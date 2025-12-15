@@ -103,13 +103,13 @@ For higher-quality requirement extraction you can use a local LLM via **Ollama**
 
 **CLI:**
 ```bash
-# Use LLM when available (default behavior)
+# Default: rule-based analyzer with spaCy NLP (no LLM)
 py -3.11 jd_analyzer.py job_description.txt --output jd_meta.yaml
 
-# Force LLM on (will fallback safely if Ollama isn't running)
+# Opt in to Ollama LLM (will still fallback safely if Ollama isn't running)
 py -3.11 jd_analyzer.py job_description.txt --llm --output jd_meta.yaml
 
-# Force rule-based only (skip LLM entirely)
+# Explicitly force rule-based only (equivalent to default)
 py -3.11 jd_analyzer.py job_description.txt --no-llm --output jd_meta.yaml
 ```
 

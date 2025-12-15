@@ -10,8 +10,6 @@ import streamlit as st
 import yaml
 
 from baseline import score_resume, load_config
-from jd_analyzer_llm import analyze_jd_with_llm
-from jd_analyzer import generate_jd_meta  # Assuming this is importable
 from parser import extract_text
 
 

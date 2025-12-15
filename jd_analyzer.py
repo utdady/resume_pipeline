@@ -116,17 +116,22 @@ def extract_experience_requirements(text: str) -> Dict:
                     for child in token.children:
                         if "year" in child.text.lower() or "experience" in child.text.lower():
                             years = int(token.text)
-                            # Check for ranges
-                            if token.nbor(1).text in ["-", "–", "to"]:
-                                try:
-                                    end_years = int(token.nbor(2).text)
-                                    return {
-                                        "min_years": min(years, end_years),
-                                        "max_years": max(years, end_years),
-                                        "preferred_years": int((years + end_years) / 2)
-                                    }
-                                except (ValueError, IndexError):
-                                    pass
+                            # Check for ranges safely (avoid IndexError at sentence boundaries)
+                            try:
+                                if token.nbor(1).text in ["-", "–", "to"]:
+                                    try:
+                                        end_years = int(token.nbor(2).text)
+                                        return {
+                                            "min_years": min(years, end_years),
+                                            "max_years": max(years, end_years),
+                                            "preferred_years": int((years + end_years) / 2),
+                                        }
+                                    except ValueError:
+                                        # Not a clean integer after the range marker; fall back to single value
+                                        pass
+                            except IndexError:
+                                # No neighbor tokens available for range detection; ignore and treat as single value
+                                pass
                             return {
                                 "min_years": years,
                                 "max_years": years + 2,
@@ -751,8 +756,8 @@ def main() -> None:
         "--llm",
         dest="llm",
         action="store_true",
-        default=True,
-        help="Use Ollama LLM for analysis (default: True; falls back to rules if unavailable)",
+        default=False,
+        help="Use Ollama LLM for analysis (off by default; falls back to rules if unavailable)",
     )
     parser.add_argument(
         "--no-llm",

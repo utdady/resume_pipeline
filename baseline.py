@@ -50,21 +50,15 @@ def find_keywords_nlp(text: str, keyword: str, nlp_model) -> bool:
     doc = nlp_model(text)
     keyword_lower = keyword.lower()
     keyword_words = keyword_lower.split()
-    text_lower = text.lower()
-    
-    # Check for exact phrase match first
-    if keyword_lower in text_lower:
-        return True
     
     # For compound terms, check if words appear together in context
     if len(keyword_words) > 1:
         # Check if all words appear in the same sentence or nearby sentences
         for sent in doc.sents:
-            sent_lower = sent.text.lower()
             sent_tokens = [t.text.lower() for t in sent]
             
-            # Check if all keyword words appear in this sentence
-            if all(word in sent_lower for word in keyword_words):
+            # Check if all keyword words appear in this sentence as full tokens
+            if all(any(tok == word for tok in sent_tokens) for word in keyword_words):
                 # Find positions of each word
                 word_positions = []
                 for word in keyword_words:
@@ -87,16 +81,19 @@ def find_keywords_nlp(text: str, keyword: str, nlp_model) -> bool:
         # by checking if words appear in noun chunks together
         for chunk in doc.noun_chunks:
             chunk_text = chunk.text.lower()
-            if all(word in chunk_text for word in keyword_words):
+            chunk_tokens = chunk_text.split()
+            if all(word in chunk_tokens for word in keyword_words):
                 return True
     
-    # Check for lemmatized forms (e.g., "experience" matches "experienced", "experiences")
-    keyword_doc = nlp_model(keyword)
-    if keyword_doc:
-        keyword_lemma = keyword_doc[0].lemma_ if len(keyword_doc) > 0 else keyword_lower
-        for token in doc:
-            if token.lemma_.lower() == keyword_lemma.lower():
-                return True
+    # Check for lemmatized forms for single-word keywords only
+    # (for multi-word phrases we already require full-token matches above)
+    if len(keyword_words) == 1:
+        keyword_doc = nlp_model(keyword)
+        if keyword_doc:
+            keyword_lemma = keyword_doc[0].lemma_ if len(keyword_doc) > 0 else keyword_lower
+            for token in doc:
+                if token.lemma_.lower() == keyword_lemma.lower():
+                    return True
     
     return False
 
