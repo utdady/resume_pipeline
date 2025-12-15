@@ -5,3 +5,6 @@ pyyaml
 scikit-learn
 xgboost
 streamlit
+spacy
+openpyxl
+requests>=2.31.0
