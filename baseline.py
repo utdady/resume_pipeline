@@ -1,9 +1,12 @@
 """NLP-enhanced resume scoring with detailed per-candidate reports."""
 import argparse
+import asyncio
 import logging
 import re
+import time
+from functools import wraps
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Set, Tuple, Optional, TypedDict
 
 import pandas as pd
 import yaml
@@ -38,6 +41,53 @@ def load_config(config_path: Path) -> Dict:
     """Load job description metadata from YAML."""
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+class ConfigSchema(TypedDict, total=False):
+    """Typed representation of the expected configuration structure."""
+
+    metadata_version: int
+    job: Dict
+    must_haves: List[str]
+    nice_to_haves: List[str]
+    title_keywords: List[str]
+    experience: Dict
+    weights: Dict[str, float]
+    thresholds: Dict[str, float]
+
+
+def validate_config(config: Dict) -> None:
+    """Validate config structure and basic invariants.
+
+    Raises:
+        ValueError: If required keys are missing or weights are malformed.
+    """
+    required_keys = ["job", "must_haves", "weights", "thresholds"]
+    missing = [key for key in required_keys if key not in config]
+    if missing:
+        raise ValueError(f"Missing required config keys: {', '.join(missing)}")
+
+    weights = config.get("weights", {})
+    if not isinstance(weights, dict) or not weights:
+        raise ValueError("Config 'weights' must be a non-empty dict.")
+
+    total_weight = sum(v for v in weights.values() if isinstance(v, (int, float)))
+    if not (0.99 <= total_weight <= 1.01):
+        raise ValueError(f"Weights must sum to 1.0 (±0.01); got {total_weight:.3f}")
+
+
+def log_performance(func):
+    """Decorator to log function execution time using the module logger."""
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        duration = time.time() - start
+        logger.info("%s completed in %.2fs", func.__name__, duration)
+        return result
+
+    return wrapper
 
 
 def normalize_text(text: str) -> str:
@@ -389,6 +439,7 @@ DEFAULT_THRESHOLDS = {
 DEFAULT_LLM_TIMEOUT = 90  # seconds
 
 
+@log_performance
 def score_resume(resume_path: Path, config: Dict) -> Dict:
     """Score a single resume against the job description.
 
@@ -552,6 +603,32 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
     }
 
 
+async def score_resume_async(resume_path: Path, config: Dict) -> Dict:
+    """Async wrapper around score_resume using a thread pool."""
+    return await asyncio.to_thread(score_resume, resume_path, config)
+
+
+async def score_resumes_parallel(
+    resume_paths: List[Path],
+    config: Dict,
+    max_concurrent: int = 4,
+) -> List[Dict]:
+    """
+    Score multiple resumes in parallel using asyncio with a concurrency limit.
+
+    This is intended for programmatic use; the CLI currently uses sequential
+    scoring to keep behavior simple and predictable.
+    """
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def score_with_limit(path: Path) -> Dict:
+        async with semaphore:
+            return await score_resume_async(path, config)
+
+    tasks = [score_with_limit(p) for p in resume_paths]
+    return await asyncio.gather(*tasks)
+
+
 def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -598,6 +675,13 @@ def main() -> None:
     
     # Load configuration
     config = load_config(args.config)
+    
+    # Validate configuration structure and values
+    try:
+        validate_config(config)
+    except ValueError as e:
+        logger.error("Invalid configuration: %s", e)
+        return
 
     # Attach runtime flag so score_resume can see whether to use LLM
     if args.llm_resume:
