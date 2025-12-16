@@ -1,5 +1,6 @@
 """NLP-enhanced resume scoring with detailed per-candidate reports."""
 import argparse
+import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional
@@ -8,6 +9,8 @@ import pandas as pd
 import yaml
 
 from parser import extract_text
+
+logger = logging.getLogger(__name__)
 
 try:
     import spacy
@@ -42,12 +45,18 @@ def normalize_text(text: str) -> str:
     return text.lower().strip()
 
 
-def find_keywords_nlp(text: str, keyword: str, nlp_model) -> bool:
-    """Use NLP to find if a keyword appears in context (more human-like)."""
+def find_keywords_nlp(text: str, keyword: str, nlp_model, doc=None) -> bool:
+    """
+    Use NLP to find if a keyword appears in context (more human-like).
+
+    The caller can optionally pass a pre-parsed spaCy doc to avoid
+    reparsing the same text for every keyword.
+    """
     if not nlp_model:
         return False
     
-    doc = nlp_model(text)
+    if doc is None:
+        doc = nlp_model(text)
     keyword_lower = keyword.lower()
     keyword_words = keyword_lower.split()
     
@@ -103,13 +112,17 @@ def find_keywords(text: str, keywords: List[str], use_nlp: bool = True) -> Set[s
     normalized = normalize_text(text)
     found = set()
     nlp_model = get_nlp_model() if use_nlp else None
+    doc = None
     
     for keyword in keywords:
         keyword_lower = keyword.lower()
         
         # Try NLP-enhanced matching first if available
         if nlp_model and use_nlp:
-            if find_keywords_nlp(text, keyword, nlp_model):
+            if doc is None:
+                # Parse the text ONCE per call and reuse for all keywords
+                doc = nlp_model(text)
+            if find_keywords_nlp(text, keyword, nlp_model, doc=doc):
                 found.add(keyword_lower)
                 continue
         
@@ -354,7 +367,7 @@ def generate_candidate_report(
     try:
         df.to_excel(excel_path, index=False)
     except Exception as exc:
-        print(f"Warning: failed to write Excel report for {resume_name}: {exc}")
+        logger.warning("Failed to write Excel report for %s: %s", resume_name, exc)
         excel_path = None
     
     return csv_path, excel_path
@@ -436,16 +449,19 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
                 llm_timeout = local_config.get("_llm_timeout", DEFAULT_LLM_TIMEOUT)
                 llm_result = analyze_resume_with_ollama(text, local_config, timeout=llm_timeout)
             else:
-                print("Ollama not available for resume analysis; using NLP-based scoring.")
+                logger.info("Ollama not available for resume analysis; using NLP-based scoring.")
         except requests.exceptions.Timeout:
-            print(f"Warning: Ollama timed out for {resume_path.name}; using NLP fallback")
+            logger.warning("Ollama timed out for %s; using NLP fallback", resume_path.name)
             llm_result = None
         except json.JSONDecodeError as e:
-            print(f"Warning: Ollama returned invalid JSON for {resume_path.name}: {e}")
-            print("Falling back to NLP-based scoring.")
+            logger.warning(
+                "Ollama returned invalid JSON for %s: %s. Falling back to NLP-based scoring.",
+                resume_path.name,
+                e,
+            )
             llm_result = None
         except Exception as exc:
-            print(f"Warning: LLM resume analysis failed for {resume_path.name}: {exc}")
+            logger.warning("LLM resume analysis failed for %s: %s", resume_path.name, exc)
             llm_result = None
 
     # Calculate component scores
@@ -576,6 +592,9 @@ def main() -> None:
         help="Disable generation of per-candidate requirement reports",
     )
     args = parser.parse_args()
+
+    # Basic logging configuration for CLI usage
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     
     # Load configuration
     config = load_config(args.config)
@@ -604,15 +623,15 @@ def main() -> None:
                         seen.add(file_path)
     
     if not resume_files:
-        print("No resume files found!")
+        logger.warning("No resume files found!")
         return
     
-    print(f"Processing {len(resume_files)} resume(s)...")
+    logger.info("Processing %d resume(s)...", len(resume_files))
     
     # Score each resume
     results = []
     for resume_path in resume_files:
-        print(f"  Scoring {resume_path.name}...")
+        logger.info("Scoring %s...", resume_path.name)
         result = score_resume(resume_path, config)
         
         # Generate per-candidate requirement reports unless disabled
@@ -646,9 +665,8 @@ def main() -> None:
     
     # Save to CSV
     df.to_csv(args.output, index=False)
-    print(f"\nResults saved to {args.output}")
-    print(f"\nTop candidates:")
-    print(df[["file", "score", "recommendation", "years_found", "must_haves_present"]].head(10).to_string(index=False))
+    logger.info("Results saved to %s", args.output)
+    logger.info("Top candidates:\n%s", df[["file", "score", "recommendation", "years_found", "must_haves_present"]].head(10).to_string(index=False))
 
 
 if __name__ == "__main__":

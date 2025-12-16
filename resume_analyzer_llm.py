@@ -1,9 +1,12 @@
 """LLM-powered resume analyzer with Ollama, used to interpret requirements per candidate."""
 import json
+import logging
 from typing import Dict, Any
 
 from jd_analyzer_llm import OLLAMA_URL, MODEL
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 def analyze_resume_with_ollama(resume_text: str, config: Dict[str, Any], timeout: int = 90) -> Dict[str, Any]:

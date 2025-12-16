@@ -1,6 +1,7 @@
 """Auto-extract job requirements from any job description and generate jd_meta.yaml.
 Enhanced with NLP using spaCy for human-like understanding."""
 import argparse
+import logging
 import re
 import sys
 from pathlib import Path
@@ -10,14 +11,18 @@ import yaml
 
 from jd_analyzer_llm import analyze_jd_hybrid
 
+logger = logging.getLogger(__name__)
+
 try:
     import spacy
     from spacy import displacy
     NLP_AVAILABLE = True
 except ImportError:
     NLP_AVAILABLE = False
-    print("Warning: spaCy not installed. Install with: pip install spacy && python -m spacy download en_core_web_sm")
-    print("Falling back to basic regex parsing...")
+    logger.warning(
+        "spaCy not installed. Install with: pip install spacy && python -m spacy download en_core_web_sm"
+    )
+    logger.warning("Falling back to basic regex parsing...")
 
 # Generic terms to filter out from extracted requirements
 GENERIC_TERMS_MUST_HAVE = {
@@ -82,8 +87,8 @@ def get_nlp_model():
         try:
             _nlp_model = spacy.load("en_core_web_sm")
         except OSError:
-            print("Warning: spaCy model 'en_core_web_sm' not found.")
-            print("Install with: python -m spacy download en_core_web_sm")
+            logger.warning("spaCy model 'en_core_web_sm' not found.")
+            logger.warning("Install with: python -m spacy download en_core_web_sm")
             return None
     return _nlp_model
 
@@ -720,13 +725,17 @@ def generate_jd_meta(
     with open(output_path, 'w', encoding='utf-8') as f:
         yaml.dump(jd_meta, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
     
-    print(f"Generated jd_meta.yaml at {output_path}")
-    print(f"  Domain: {domain}")
-    print(f"  Must-haves: {len(must_haves)}")
-    print(f"  Nice-to-haves: {len(nice_to_haves)}")
-    print(f"  Experience: {experience['min_years']}-{experience['max_years']} years")
+    logger.info("Generated jd_meta.yaml at %s", output_path)
+    logger.info(
+        "Domain: %s | Must-haves: %d | Nice-to-haves: %d | Experience: %s-%s years",
+        domain,
+        len(must_haves),
+        len(nice_to_haves),
+        experience["min_years"],
+        experience["max_years"],
+    )
     if NLP_AVAILABLE and get_nlp_model():
-        print("  Using NLP-enhanced parsing")
+        logger.info("Using NLP-enhanced parsing")
 
 
 def main() -> None:
@@ -771,18 +780,21 @@ def main() -> None:
         help="Force rule-based analysis (skip LLM)",
     )
     args = parser.parse_args()
+
+    # Basic logging configuration for CLI usage
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     
     # Read input
     if str(args.input) == "-":
         text = sys.stdin.read()
     else:
         if not args.input.exists():
-            print(f"Error: File not found: {args.input}")
+            logger.error("Error: File not found: %s", args.input)
             return
         text = args.input.read_text(encoding="utf-8", errors="ignore")
     
     if not text.strip():
-        print("Error: Empty job description")
+        logger.error("Error: Empty job description")
         return
     
     # Generate metadata (LLM hybrid)

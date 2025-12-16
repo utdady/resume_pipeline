@@ -1,5 +1,6 @@
 """LLM-powered job description analyzer with Ollama, with rule-based fallback."""
 import json
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -8,6 +9,8 @@ import yaml
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "llama3.2"
+
+logger = logging.getLogger(__name__)
 
 
 def _build_summary(text: str, max_len: int = 200) -> str:
@@ -198,7 +201,7 @@ def analyze_jd_hybrid(
     """
     if use_llm and check_ollama_available():
         try:
-            print("Analyzing with Ollama LLM...")
+            logger.info("Analyzing job description with Ollama LLM...")
             config = analyze_jd_with_ollama(jd_text)
 
             if job_title:
@@ -209,22 +212,24 @@ def analyze_jd_hybrid(
             with open(output_path, "w", encoding="utf-8") as f:
                 yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
-            print(f"Used Ollama AI (Domain: {config['job'].get('domain', 'unknown')})")
-            print(f"  Must-haves: {len(config['must_haves'])}")
-            print(f"  Nice-to-haves: {len(config['nice_to_haves'])}")
+            logger.info(
+                "Used Ollama AI (Domain: %s). Must-haves: %d, Nice-to-haves: %d",
+                config["job"].get("domain", "unknown"),
+                len(config["must_haves"]),
+                len(config["nice_to_haves"]),
+            )
             return config
         except Exception as exc:
-            print(f"Warning: Ollama failed: {exc}")
-            print("Falling back to rule-based analysis...")
+            logger.warning("Ollama JD analysis failed: %s. Falling back to rule-based analysis...", exc)
 
     # Fallback to existing rule-based analyzer
     from jd_analyzer import generate_jd_meta
 
-    print("Using rule-based analysis...")
+    logger.info("Using rule-based JD analysis...")
     generate_jd_meta(jd_text, output_path, job_title, requisition_id)
 
     with open(output_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    print("Used rule-based analyzer")
+    logger.info("Used rule-based JD analyzer")
     return config
