@@ -19,6 +19,27 @@ except ImportError:
     print("Warning: spaCy not installed. Install with: pip install spacy && python -m spacy download en_core_web_sm")
     print("Falling back to basic regex parsing...")
 
+# Generic terms to filter out from extracted requirements
+GENERIC_TERMS_MUST_HAVE = {
+    "years", "experience", "knowledge", "proficiency", "required", 
+    "must", "have", "essential", "and", "the", "with", "of", "in",
+    "minimum", "qualifications", "requirements", "troubleshoot",
+    "exposure", "machine", "web", "detail", "build", "company",
+    "responsibilities", "applications", "teams", "participate",
+    "reviews", "platforms", "qualifications", "skills", "presentations",
+    "transactions", "research", "forecasts", "projections", "level"
+}
+
+GENERIC_TERMS_NICE_TO_HAVE = {
+    "years", "experience", "knowledge", "proficiency", "preferred",
+    "nice", "have", "plus", "bonus", "and", "the", "with", "of", "in",
+    "additional", "qualifications", "troubleshoot", "exposure", "machine",
+    "web", "detail", "build", "company", "responsibilities", "applications",
+    "teams", "participate", "reviews", "platforms", "qualifications",
+    "skills", "presentations", "transactions", "research", "forecasts",
+    "projections", "level", "knowledge", "methodology"
+}
+
 
 # Domain detection keywords
 DOMAIN_KEYWORDS = {
@@ -432,27 +453,19 @@ def extract_must_haves(text: str) -> List[str]:
     must_haves = list(set([mh.strip() for mh in must_haves if len(mh.strip()) > 2]))
     
     # Filter out generic terms and single-word generic nouns
-    generic_terms = {"years", "experience", "knowledge", "proficiency", "required", 
-                     "must", "have", "essential", "and", "the", "with", "of", "in",
-                     "minimum", "qualifications", "requirements", "troubleshoot",
-                     "exposure", "machine", "web", "detail", "build", "company",
-                     "responsibilities", "applications", "teams", "participate",
-                     "reviews", "platforms", "qualifications", "skills", "presentations",
-                     "transactions", "research", "forecasts", "projections", "level"}
-    
     # More aggressive filtering
     filtered_must_haves = []
     for mh in must_haves:
         mh_lower = mh.lower()
         # Skip if it's a generic term or contains only generic words
-        if mh_lower in generic_terms:
+        if mh_lower in GENERIC_TERMS_MUST_HAVE:
             continue
         # Skip single words that are too generic (unless they're technical terms)
         if len(mh.split()) == 1 and mh_lower in ["master", "bachelor", "degree"]:
             continue
         # Skip if it's mostly generic words
         words = mh_lower.split()
-        generic_word_count = sum(1 for w in words if w in generic_terms)
+        generic_word_count = sum(1 for w in words if w in GENERIC_TERMS_MUST_HAVE)
         if len(words) > 0 and generic_word_count / len(words) > 0.5:
             continue
         filtered_must_haves.append(mh)
@@ -556,22 +569,14 @@ def extract_nice_to_haves(text: str) -> List[str]:
     nice_to_haves = list(set([nh.strip() for nh in nice_to_haves if len(nh.strip()) > 2]))
     
     # Filter out generic terms
-    generic_terms = {"years", "experience", "knowledge", "proficiency", "preferred",
-                     "nice", "have", "plus", "bonus", "and", "the", "with", "of", "in",
-                     "additional", "qualifications", "troubleshoot", "exposure", "machine",
-                     "web", "detail", "build", "company", "responsibilities", "applications",
-                     "teams", "participate", "reviews", "platforms", "qualifications",
-                     "skills", "presentations", "transactions", "research", "forecasts",
-                     "projections", "level", "knowledge", "methodology"}
-    
     filtered_nice_to_haves = []
     for nh in nice_to_haves:
         nh_lower = nh.lower()
-        if nh_lower in generic_terms:
+        if nh_lower in GENERIC_TERMS_NICE_TO_HAVE:
             continue
         # Skip if it's mostly generic words
         words = nh_lower.split()
-        generic_word_count = sum(1 for w in words if w in generic_terms)
+        generic_word_count = sum(1 for w in words if w in GENERIC_TERMS_NICE_TO_HAVE)
         if len(words) > 0 and generic_word_count / len(words) > 0.5:
             continue
         filtered_nice_to_haves.append(nh)

@@ -98,13 +98,28 @@ Respond with ONLY this JSON structure:
     result = response.json()
     response_text = result.get("response", "")
 
-    # Clean markdown fences if present
-    if "```json" in response_text:
-        response_text = response_text.split("```json", 1)[1].split("```", 1)[0]
-    elif "```" in response_text:
-        response_text = response_text.split("```", 1)[1].split("```", 1)[0]
+    # Clean markdown fences if present - improved validation
+    response_text = response_text.strip()
+    if response_text.startswith("```"):
+        # Extract content between first and last ```
+        parts = response_text.split("```")
+        for part in parts[1::2]:  # Check odd indices (inside fences)
+            part = part.strip()
+            # Remove language identifier if present (e.g., "json")
+            if part.startswith("json"):
+                part = part[4:].strip()
+            if part.startswith("{"):
+                response_text = part
+                break
+        else:
+            # If no valid JSON found in fences, try the whole response
+            response_text = response_text.replace("```json", "").replace("```", "").strip()
 
-    extracted = json.loads(response_text.strip())
+    # Validate JSON before parsing
+    if not response_text.startswith("{"):
+        raise ValueError(f"LLM response does not start with JSON object: {response_text[:100]}...")
+    
+    extracted = json.loads(response_text)
 
     required = ["job_title", "domain", "must_haves", "nice_to_haves", "experience", "title_keywords"]
     for field in required:
@@ -158,7 +173,28 @@ def analyze_jd_hybrid(
 ) -> Dict[str, Any]:
     """
     Hybrid approach: Try LLM, fallback to rule-based analyzer.
-    Returns the config dict and writes YAML to output_path.
+    
+    Args:
+        jd_text: The job description text to analyze
+        output_path: Path where the YAML config will be written
+        use_llm: If True, attempt to use Ollama LLM for analysis
+        job_title: Optional job title to override auto-detection
+        requisition_id: Optional requisition ID to include in config
+    
+    Returns:
+        Dict containing the job description configuration with:
+            - job: Dict with title, domain, requisition_id, summary
+            - must_haves: List of critical requirements
+            - nice_to_haves: List of preferred skills
+            - title_keywords: Keywords for role matching
+            - experience: Dict with min_years, max_years, preferred_years
+            - weights: Scoring weights
+            - thresholds: Score thresholds
+    
+    Behavior:
+        - If use_llm=True and Ollama is available: Uses LLM for analysis
+        - If LLM fails or is unavailable: Falls back to rule-based NLP analysis
+        - Always writes the resulting config to output_path as YAML
     """
     if use_llm and check_ollama_available():
         try:

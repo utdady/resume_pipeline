@@ -299,7 +299,27 @@ def generate_candidate_report(
     found_nice_to_haves: List[str],
     reports_dir: Path,
 ) -> Tuple[Optional[Path], Optional[Path]]:
-    """Create CSV and Excel reports showing binary coverage for each requirement."""
+    """
+    Create CSV and Excel reports showing binary coverage for each requirement.
+    
+    Args:
+        resume_name: Name of the resume file (used for output filename)
+        must_haves: List of all must-have requirements
+        nice_to_haves: List of all nice-to-have requirements
+        found_must_haves: List of must-haves found in the resume
+        found_nice_to_haves: List of nice-to-haves found in the resume
+        reports_dir: Directory where reports will be saved
+    
+    Returns:
+        Tuple of (csv_path, excel_path). Either may be None if creation failed.
+    
+    CSV Format:
+        Columns: requirement, category, met_binary, met
+        - requirement: The requirement text
+        - category: "must_have" or "nice_to_have"
+        - met_binary: 1 if met, 0 if not met
+        - met: "Yes" or "No"
+    """
     if not reports_dir:
         return None, None
     
@@ -340,12 +360,46 @@ def generate_candidate_report(
     return csv_path, excel_path
 
 
+# Default scoring weights and thresholds
+DEFAULT_WEIGHTS = {
+    "must_have_coverage": 0.45,
+    "skill_overlap": 0.25,
+    "title_similarity": 0.15,
+    "years_exp": 0.15,
+}
+
+DEFAULT_THRESHOLDS = {
+    "advance": 0.72,
+    "review": 0.50,
+}
+
+DEFAULT_LLM_TIMEOUT = 90  # seconds
+
+
 def score_resume(resume_path: Path, config: Dict) -> Dict:
     """Score a single resume against the job description.
+
+    Args:
+        resume_path: Path to the resume file
+        config: Job description configuration dict. May contain:
+            - must_haves: List of critical requirements
+            - nice_to_haves: List of preferred skills
+            - title_keywords: Keywords for role matching
+            - experience: Dict with min_years, max_years, preferred_years
+            - weights: Scoring weights (defaults to DEFAULT_WEIGHTS)
+            - thresholds: Score thresholds (defaults to DEFAULT_THRESHOLDS)
+            - _use_llm_resume: If True, use LLM for requirement evaluation
+            - _llm_timeout: Timeout in seconds for LLM calls (default: 90)
+
+    Returns:
+        Dict with scoring results including score, recommendation, explanation, etc.
 
     Optionally uses an LLM (Ollama) to interpret whether each requirement is met,
     falling back to NLP/rule-based scoring when LLM is unavailable or fails.
     """
+    # Create isolated config copy to avoid mutation issues
+    local_config = dict(config)
+    
     try:
         text = extract_text(resume_path)
     except Exception as e:
@@ -356,20 +410,20 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
             "explanation": f"Error parsing file: {e}",
             "years_found": 0.0,
             "must_haves_present": 0,
-            "must_haves_total": len(config.get("must_haves", [])),
+            "must_haves_total": len(local_config.get("must_haves", [])),
         }
     
     # Extract components
-    must_haves = config.get("must_haves", [])
-    nice_to_haves = config.get("nice_to_haves", [])
-    title_keywords = config.get("title_keywords", [])
-    experience = config.get("experience", {})
-    weights = config.get("weights", {})
-    thresholds = config.get("thresholds", {})
+    must_haves = local_config.get("must_haves", [])
+    nice_to_haves = local_config.get("nice_to_haves", [])
+    title_keywords = local_config.get("title_keywords", [])
+    experience = local_config.get("experience", {})
+    weights = local_config.get("weights", DEFAULT_WEIGHTS)
+    thresholds = local_config.get("thresholds", DEFAULT_THRESHOLDS)
     
     # Optional: LLM-powered requirement evaluation
     llm_result = None
-    use_llm_resume = config.get("_use_llm_resume", False)
+    use_llm_resume = local_config.get("_use_llm_resume", False)
     if use_llm_resume:
         try:
             import requests
@@ -378,7 +432,9 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
             from resume_analyzer_llm import analyze_resume_with_ollama
 
             if check_ollama_available():
-                llm_result = analyze_resume_with_ollama(text, config)
+                # Use configurable timeout (default 90s, can be overridden in config)
+                llm_timeout = local_config.get("_llm_timeout", DEFAULT_LLM_TIMEOUT)
+                llm_result = analyze_resume_with_ollama(text, local_config, timeout=llm_timeout)
             else:
                 print("Ollama not available for resume analysis; using NLP-based scoring.")
         except requests.exceptions.Timeout:
@@ -540,12 +596,9 @@ def main() -> None:
                     resume_files.append(path)
                     seen.add(path)
         elif path.is_dir():
-            for ext in ["*.pdf", "*.docx", "*.txt"]:
-                for file_path in path.glob(ext):
-                    if file_path not in seen:
-                        resume_files.append(file_path)
-                        seen.add(file_path)
-                for file_path in path.glob(ext.upper()):
+            # Use case-insensitive matching to avoid redundant glob calls
+            for file_path in path.iterdir():
+                if file_path.is_file() and file_path.suffix.lower() in {".pdf", ".docx", ".txt"}:
                     if file_path not in seen:
                         resume_files.append(file_path)
                         seen.add(file_path)

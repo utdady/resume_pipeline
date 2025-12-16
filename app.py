@@ -10,6 +10,7 @@ import streamlit as st
 import yaml
 
 from baseline import score_resume, load_config
+from jd_analyzer import generate_jd_meta
 from parser import extract_text
 
 
@@ -204,6 +205,10 @@ def show_scoring_page():
             st.error("❌ Please upload or paste a job description before analyzing.")
         else:
             try:
+                # Clear previous results when analyzing new JD to prevent session state bloat
+                for key in ["results_df", "config", "job_title", "base_config", "custom_config", "config_yaml"]:
+                    st.session_state.pop(key, None)
+                
                 from jd_analyzer_llm import analyze_jd_hybrid, check_ollama_available
                 
                 if use_llm and not check_ollama_available():
@@ -434,10 +439,16 @@ def show_scoring_page():
                 progress_bar.progress(40)
                 
                 results = []
+                use_llm_resume = config.get("_use_llm_resume", False)
                 for i, resume_path in enumerate(resume_paths):
                     progress = 40 + int((i + 1) / len(resume_paths) * 50)
                     progress_bar.progress(progress)
-                    status_text.text(f"📊 Scoring {resume_path.name}... ({i+1}/{len(resume_paths)})")
+                    
+                    # Show appropriate status message based on LLM usage
+                    if use_llm_resume:
+                        status_text.text(f"🧠 Analyzing {resume_path.name} with AI (may take 60-90s)... ({i+1}/{len(resume_paths)})")
+                    else:
+                        status_text.text(f"📊 Scoring {resume_path.name}... ({i+1}/{len(resume_paths)})")
 
                     # For UI we rely on baseline's internal hybrid logic (config flag)
                     result = score_resume(resume_path, config)

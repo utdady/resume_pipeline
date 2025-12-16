@@ -94,13 +94,28 @@ Respond with ONLY valid JSON using exactly this structure:
     result = response.json()
     response_text = result.get("response", "")
 
-    # Clean markdown fences if present (defensive)
-    if "```json" in response_text:
-        response_text = response_text.split("```json", 1)[1].split("```", 1)[0]
-    elif "```" in response_text:
-        response_text = response_text.split("```", 1)[1].split("```", 1)[0]
+    # Clean markdown fences if present - improved validation
+    response_text = response_text.strip()
+    if response_text.startswith("```"):
+        # Extract content between first and last ```
+        parts = response_text.split("```")
+        for part in parts[1::2]:  # Check odd indices (inside fences)
+            part = part.strip()
+            # Remove language identifier if present (e.g., "json")
+            if part.startswith("json"):
+                part = part[4:].strip()
+            if part.startswith("{"):
+                response_text = part
+                break
+        else:
+            # If no valid JSON found in fences, try the whole response
+            response_text = response_text.replace("```json", "").replace("```", "").strip()
 
-    data = json.loads(response_text.strip())
+    # Validate JSON before parsing
+    if not response_text.startswith("{"):
+        raise ValueError(f"LLM response does not start with JSON object: {response_text[:100]}...")
+    
+    data = json.loads(response_text)
 
     # Ensure we have the expected top-level keys
     for key in ["must_haves", "nice_to_haves"]:
