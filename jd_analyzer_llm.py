@@ -22,23 +22,50 @@ def analyze_jd_with_ollama(jd_text: str, timeout: int = 30) -> Dict[str, Any]:
     """
     prompt = f"""Analyze this job description and extract structured requirements.
 
+Extract these fields from the job description:
+
+1. job_title: The position title (e.g., "Senior Software Engineer", "Financial Analyst", "Electrical Engineer")
+
+2. domain: Choose ONE from [software, electrical, mechanical, data, financial, business]
+   - software: programming, development, APIs, databases, web applications, software engineering
+   - electrical: power systems, circuits, protection, CAPE/ASPEN, Gridscale X, electrical engineering
+   - mechanical: CAD, manufacturing, design, thermodynamics, mechanical engineering
+   - data: analytics, machine learning, statistics, data science, data engineering
+   - financial: finance, investment banking, accounting, financial modeling, CFA
+   - business: management, consulting, operations, strategy, business analysis
+
+3. must_haves: CRITICAL requirements (degree, years, specific skills/tools)
+   - Extract ONLY concrete skills, NOT "experience" or "knowledge"
+   - Examples: ["bachelor electrical engineering", "python", "sql", "cape software", "5 years"]
+   - NOT: ["years", "experience", "proficiency", "knowledge", "skills"]
+   - Clean compound terms: "sql experience" → "sql", "python programming" → "python"
+   - Recognize synonyms: "Gridscale X" = "CAPE software", "fault analysis" = "short circuit"
+
+4. nice_to_haves: Preferred/bonus skills
+   - Similar rules as must_haves
+   - Examples: ["aws", "docker", "agile", "tableau", "kubernetes"]
+
+5. experience: Extract years from patterns like "4-6 years", "5+ years"
+   {{
+     "min_years": 4,
+     "max_years": 6,
+     "preferred_years": 5
+   }}
+   - If range: "4-6 years" → min: 4, max: 6, preferred: 5
+   - If single: "5 years" → min: 5, max: 7, preferred: 5
+   - If minimum: "5+ years" → min: 5, max: 10, preferred: 5
+
+6. title_keywords: Role-relevant terms for matching
+   - Examples: ["engineer", "power", "systems", "protection", "developer", "analyst"]
+
 CRITICAL RULES:
-1. Extract ONLY actual skills and qualifications, NOT generic words
-2. DO NOT include: "years", "experience", "knowledge", "proficiency", "skills", "ability"
-3. Clean compound terms: "sql experience" -> "sql", "python programming" -> "python"
-4. Recognize variations: "Gridscale X" = "CAPE software", "fault analysis" = "short circuit"
-5. Return ONLY valid JSON, no markdown blocks, no explanations
+1. Clean compound terms: "sql experience" → "sql"
+2. Recognize synonyms: "Gridscale X" = "CAPE software"
+3. Extract actual skills/tools, NOT generic words
+4. Return ONLY valid JSON, no markdown, no explanation
 
 Job Description:
 {jd_text}
-
-Extract:
-- job_title: string (auto-detect from JD)
-- domain: one of [software, electrical, mechanical, data, financial, business]
-- must_haves: list of CLEAN skill terms (bachelor, python, cape, NOT "years of experience")
-- nice_to_haves: list of CLEAN preferred skills
-- experience: {{min_years: int, max_years: int, preferred_years: int}}
-- title_keywords: list of role-relevant terms
 
 Respond with ONLY this JSON structure:
 {{
@@ -46,7 +73,7 @@ Respond with ONLY this JSON structure:
   "domain": "...",
   "must_haves": [...],
   "nice_to_haves": [...],
-  "experience": {{...}},
+  "experience": {{"min_years": 0, "max_years": 0, "preferred_years": 0}},
   "title_keywords": [...]
 }}"""
 

@@ -6,9 +6,14 @@ from jd_analyzer_llm import OLLAMA_URL, MODEL
 import requests
 
 
-def analyze_resume_with_ollama(resume_text: str, config: Dict[str, Any], timeout: int = 60) -> Dict[str, Any]:
+def analyze_resume_with_ollama(resume_text: str, config: Dict[str, Any], timeout: int = 90) -> Dict[str, Any]:
     """
     Ask Ollama to evaluate how well a single resume meets each must-have and nice-to-have.
+
+    Timeout of 90s allows for:
+    - Long resumes (up to 5 pages)
+    - 20+ requirements to evaluate
+    - Processing on moderate hardware
 
     Returns a dict of the form:
     {

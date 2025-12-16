@@ -372,6 +372,8 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
     use_llm_resume = config.get("_use_llm_resume", False)
     if use_llm_resume:
         try:
+            import requests
+            import json
             from jd_analyzer_llm import check_ollama_available
             from resume_analyzer_llm import analyze_resume_with_ollama
 
@@ -379,6 +381,13 @@ def score_resume(resume_path: Path, config: Dict) -> Dict:
                 llm_result = analyze_resume_with_ollama(text, config)
             else:
                 print("Ollama not available for resume analysis; using NLP-based scoring.")
+        except requests.exceptions.Timeout:
+            print(f"Warning: Ollama timed out for {resume_path.name}; using NLP fallback")
+            llm_result = None
+        except json.JSONDecodeError as e:
+            print(f"Warning: Ollama returned invalid JSON for {resume_path.name}: {e}")
+            print("Falling back to NLP-based scoring.")
+            llm_result = None
         except Exception as exc:
             print(f"Warning: LLM resume analysis failed for {resume_path.name}: {exc}")
             llm_result = None
@@ -497,7 +506,7 @@ def main() -> None:
     parser.add_argument(
         "--llm-resume",
         action="store_true",
-        help="Use Ollama LLM to interpret resumes (falls back to NLP when unavailable)",
+        help="Use Ollama LLM to evaluate each requirement per resume (slower but more accurate; falls back to NLP if unavailable)",
     )
     parser.add_argument(
         "--reports-dir",
